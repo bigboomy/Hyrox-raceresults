@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>HYROX Coaching Dashboard</title>
+<style>
+:root { color-scheme: light; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f4f6f9; color: #000; padding: 20px; min-height: 100vh; }
+
+.header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
+.header h1 { font-size: 1.55rem; font-weight: 700; }
+.header .sub { color: #666; font-size: 0.88rem; margin-top: 4px; }
+h2 { font-size: 0.86rem; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 0.7px; margin-bottom: 14px; }
+
+.section { background: #fff; border-radius: 12px; padding: 20px; box-shadow: 0 1px 4px rgba(0,0,0,.07); border: 1px solid #eee; margin-bottom: 16px; }
+
+.input { border: 1px solid #ddd; border-radius: 8px; padding: 8px 12px; font-size: 0.93rem; outline: none; background: #fff; color: #000; }
+.input:focus { border-color: #2c3e50; }
+.btn-primary { background: #2c3e50; color: #fff; border: none; border-radius: 8px; padding: 9px 20px; font-size: 0.93rem; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.btn-primary:hover { background: #1a252f; }
+.btn-primary:disabled { background: #999; cursor: not-allowed; }
+.btn-outline { background: #fff; color: #333; border: 1px solid #ddd; border-radius: 8px; padding: 8px 14px; font-size: 0.9rem; cursor: pointer; white-space: nowrap; }
+.btn-outline:hover { background: #f5f5f5; }
+.btn-sm { padding: 5px 10px; font-size: 0.8rem; border-radius: 6px; cursor: pointer; border: 1px solid #ddd; background: #fff; color: #333; }
+.btn-sm:hover { background: #f0f0f0; }
+.btn-pin { background: #2c3e50; color: #fff; border: none; border-radius: 6px; padding: 6px 13px; font-size: 0.82rem; font-weight: 600; cursor: pointer; }
+.btn-pin:hover { background: #1a252f; }
+
+/* search */
+.search-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.search-row .input { min-width: 130px; }
+
+/* location picker */
+.loc-picker { border: 1px solid #e8e8e8; border-radius: 10px; padding: 14px; margin-top: 12px; background: #fafafa; }
+.loc-filter { width: 100%; margin-bottom: 10px; }
+.loc-grid { display: flex; flex-wrap: wrap; gap: 5px; max-height: 180px; overflow-y: auto; padding: 2px 0; }
+.loc-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 20px; border: 1px solid #ddd; font-size: 0.8rem; cursor: pointer; background: #fff; user-select: none; transition: all .15s; }
+.loc-chip:hover { border-color: #aaa; }
+.loc-chip.sel { background: #2c3e50; color: #fff; border-color: #2c3e50; }
+.loc-actions { display: flex; gap: 6px; margin-top: 10px; font-size: 0.82rem; align-items: center; color: #666; }
+.loc-actions button { background: none; border: none; color: #3498db; cursor: pointer; font-size: 0.82rem; padding: 0; }
+.loc-actions button:hover { text-decoration: underline; }
+
+/* results */
+.results-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+.rcard { background: #fff; border: 1px solid #eee; border-radius: 10px; padding: 16px; overflow: hidden; }
+.rcard-bar { height: 3px; margin: -16px -16px 12px; }
+.rcard-name { font-weight: 700; font-size: 0.95rem; }
+.rcard-loc { font-size: 0.8rem; color: #777; margin-bottom: 8px; }
+.rcard-time { font-size: 1.9rem; font-weight: 700; line-height: 1.1; margin-bottom: 3px; }
+.rcard-div { font-size: 0.84rem; color: #555; margin-bottom: 10px; }
+.rcard-metrics { display: flex; border-top: 1px solid #f0f0f0; border-bottom: 1px solid #f0f0f0; padding: 8px 0; margin-bottom: 10px; }
+.rm { flex: 1; text-align: center; }
+.rm + .rm { border-left: 1px solid #f0f0f0; }
+.rm .v { font-size: 1rem; font-weight: 700; }
+.rm .l { font-size: 0.74rem; color: #999; margin-top: 1px; }
+.mini-heat { display: flex; gap: 2px; flex-wrap: wrap; margin-bottom: 10px; }
+.mh { width: 16px; height: 12px; border-radius: 2px; }
+
+/* pin tray */
+.pin-tray { display: flex; gap: 8px; flex-wrap: wrap; }
+.pin-chip { display: inline-flex; align-items: center; gap: 8px; padding: 7px 13px; border-radius: 20px; border: 2px solid; font-size: 0.84rem; font-weight: 600; background: #fff; }
+.pin-chip-x { background: none; border: none; cursor: pointer; font-size: 1rem; opacity: 0.5; line-height: 1; padding: 0; }
+.pin-chip-x:hover { opacity: 1; }
+.empty-msg { color: #bbb; font-size: 0.88rem; font-style: italic; }
+
+/* pinned cards */
+.pinned-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+.pcard { border-radius: 10px; padding: 16px; border: 2px solid #eee; background: #fff; }
+.pcard-hdr { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+.pcard-name { font-weight: 700; font-size: 0.9rem; }
+.pcard-loc { font-size: 0.78rem; color: #777; margin-top: 2px; }
+.pcard-time { font-size: 1.75rem; font-weight: 700; margin-bottom: 4px; }
+.pcard-rank { font-size: 0.8rem; color: #666; margin-bottom: 10px; }
+.pcard-benchmarks { display: flex; gap: 0; border-top: 1px solid #f2f2f2; padding-top: 8px; margin-bottom: 10px; }
+.pb-m { flex: 1; text-align: center; }
+.pb-m + .pb-m { border-left: 1px solid #f2f2f2; }
+.pb-m .v { font-size: 0.9rem; font-weight: 700; }
+.pb-m .l { font-size: 0.7rem; color: #aaa; margin-top: 1px; }
+
+/* heatmap */
+.heatmap-scroll { overflow-x: auto; }
+.heatmap { width: 100%; border-collapse: separate; border-spacing: 3px; font-size: 0.88rem; }
+.heatmap th { padding: 5px 10px; color: #444; font-weight: 600; font-size: 0.8rem; text-align: center; white-space: nowrap; }
+.heatmap th.sc { text-align: left; }
+.heatmap td { padding: 5px 10px; text-align: center; border-radius: 5px; font-weight: 600; white-space: nowrap; }
+.heatmap .sn { text-align: left; font-weight: 500; background: transparent !important; color: #333; }
+.c-fast3{background:#1a7a4a;color:#fff} .c-fast2{background:#27ae60;color:#fff}
+.c-fast1{background:#a9dfbf;color:#1a5e35} .c-zero{background:#f0f0f0;color:#555}
+.c-slow1{background:#fad7d3;color:#922b21} .c-slow2{background:#e74c3c;color:#fff}
+.legend { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; font-size:0.8rem; color:#555; align-items:center; }
+.legend-item { display:flex; align-items:center; gap:4px; }
+.ls { width:13px; height:13px; border-radius:3px; }
+
+/* chart */
+.chart-wrap { position: relative; height: 240px; }
+
+/* pills */
+.pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:0.76rem; font-weight:600; }
+.pg{background:#d5f5e3;color:#1e8449} .pf{background:#fdebd0;color:#935116}
+.pp{background:#fadbd8;color:#922b21} .po{background:#eaf4fb;color:#1a5276}
+.green{color:#27ae60} .red{color:#e74c3c} .blue{color:#3498db}
+
+/* badges */
+.badge { background:#eef2f7; color:#2c3e50; border-radius:10px; padding:2px 9px; font-size:0.78rem; font-weight:600; margin-left:8px; }
+
+/* modal */
+.modal-bg { position:fixed; inset:0; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index:1000; }
+.modal { background:#fff; border-radius:14px; padding:28px; width:360px; box-shadow:0 12px 48px rgba(0,0,0,.2); }
+.modal-title { font-size:1.05rem; font-weight:700; margin-bottom:4px; }
+.modal-sub { font-size:0.83rem; color:#777; margin-bottom:20px; }
+.modal .input { width:100%; margin-bottom:10px; display:block; }
+.modal-row { display:flex; gap:10px; margin-top:14px; }
+.modal-status { margin-top:12px; font-size:0.83rem; min-height:20px; }
+.modal-status.err { color:#e74c3c; }
+.modal-status.ok { color:#27ae60; }
+
+/* spinner */
+.spinner-wrap { display:flex; align-items:center; gap:10px; color:#777; font-size:0.88rem; padding:16px 0; }
+.spinner { width:16px; height:16px; border:2px solid #e0e0e0; border-top-color:#3498db; border-radius:50%; animation:spin .7s linear infinite; flex-shrink:0; }
+@keyframes spin { to { transform:rotate(360deg); } }
+
+/* server badge */
+.srv-badge { font-size:0.78rem; padding:5px 11px; border-radius:12px; font-weight:600; }
+.srv-ok  { background:#d5f5e3; color:#1e8449; }
+.srv-off { background:#fef3cd; color:#856404; }
+
+
+.note { font-size:0.8rem; color:#aaa; font-style:italic; margin-top:12px; }
+code { background:#f4f4f4; padding:1px 5px; border-radius:4px; font-size:0.82rem; }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div>
+    <h1>HYROX Coaching Dashboard</h1>
+    <div class="sub">Search athletes · Pin races · Compare splits</div>
+  </div>
+  <span id="srvBadge" class="srv-badge srv-off">HYROX server offline</span>
+</div>
+
+<!-- SEARCH PANEL -->
+<div class="section">
+  <h2>Athlete Search</h2>
+  <div class="search-row">
+    <input id="lastName"   class="input" placeholder="Last name *" style="max-width:160px">
+    <input id="firstName"  class="input" placeholder="First name"  style="max-width:140px">
+    <select id="seasonSel" class="input" style="max-width:185px">
+      <option value="8">Season 8 (2025–26)</option>
+      <option value="7">Season 7 (2024–25)</option>
+      <option value="6">Season 6 (2023–24)</option>
+      <option value="5">Season 5 (2022–23)</option>
+      <option value="4">Season 4 (2021–22)</option>
+      <option value="3">Season 3 (2020–21)</option>
+    </select>
+    <button class="btn-outline" id="locToggle" onclick="toggleLocPicker()">📍 Races (0 selected)</button>
+    <button class="btn-primary" id="searchBtn" onclick="doSearch()">Search →</button>
+  </div>
+
+  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:4px">
+    <select id="genderSel" class="input" style="max-width:130px">
+      <option value="">Any gender</option>
+      <option value="male">Male</option>
+      <option value="female">Female</option>
+    </select>
+    <select id="divisionSel" class="input" style="max-width:165px">
+      <option value="">Any division</option>
+      <option value="open">Open</option>
+      <option value="pro">Pro</option>
+      <option value="doubles_men">Doubles Men</option>
+      <option value="doubles_women">Doubles Women</option>
+      <option value="doubles_mixed">Doubles Mixed</option>
+    </select>
+  </div>
+
+  <!-- Location picker -->
+  <div id="locPicker" class="loc-picker" style="display:none">
+    <input id="locFilter" class="input loc-filter" placeholder="Filter locations…" oninput="renderChips()">
+    <div id="locGrid" class="loc-grid"></div>
+    <div class="loc-actions">
+      <button onclick="selectAll()">Select all</button>
+      &nbsp;·&nbsp;
+      <button onclick="clearAll()">Clear</button>
+      &nbsp;·&nbsp;
+      <span id="selCount" style="color:#333;font-weight:600">0 selected</span>
+    </div>
+  </div>
+
+  <div id="searchMsg" style="font-size:0.82rem;color:#888;margin-top:10px;display:none"></div>
+</div>
+
+<!-- RESULTS -->
+<div class="section" id="resultsSection" style="display:none">
+  <h2>Results <span id="resultsBadge" class="badge">0</span></h2>
+  <div id="resultsGrid" class="results-grid"></div>
+</div>
+
+<!-- COMPARISON -->
+<div id="compSection" style="display:none">
+
+  <div class="section">
+    <h2>Pinned Races <span id="pinnedBadge" class="badge">0 / 6</span></h2>
+    <div id="pinTray" class="pin-tray"><span class="empty-msg">Pin races from search results to compare.</span></div>
+  </div>
+
+  <div class="section">
+    <h2>Race Detail</h2>
+    <div id="pinnedGrid" class="pinned-grid"></div>
+  </div>
+
+  <div class="section">
+    <h2>Split Performance vs Division Median</h2>
+    <p style="font-size:0.74rem;color:#bbb;margin-bottom:10px">Your time per station — colour shows distance from division median.</p>
+    <div class="heatmap-scroll"><table class="heatmap" id="heatmap"></table></div>
+    <div class="legend">
+      <span>Legend:</span>
+      <span class="legend-item"><span class="ls c-fast3"></span>&gt;1:30 faster</span>
+      <span class="legend-item"><span class="ls c-fast2"></span>&gt;:30 faster</span>
+      <span class="legend-item"><span class="ls c-fast1"></span>faster</span>
+      <span class="legend-item"><span class="ls c-zero"></span>~median</span>
+      <span class="legend-item"><span class="ls c-slow1"></span>slower</span>
+      <span class="legend-item"><span class="ls c-slow2"></span>&gt;:30 slower</span>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Gap to Top 10% — by Station</h2>
+    <p style="font-size:0.74rem;color:#bbb;margin-bottom:10px">Negative = faster than top 10%. Positive = time to claw back.</p>
+    <div class="chart-wrap"><canvas id="gapChart"></canvas></div>
+  </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js" integrity="sha384-iU8HYtnGQ8Cy4zl7gbNMOhsDTTKX02BTXptVP/vqAWIaTfM7isw76iyZCsjL2eVi" crossorigin="anonymous"></script>
+<script>
+// ─── Race catalogue (from list_races) ────────────────────────────────────────
+var SEASON_LOCS = {
+  8: ["acapulco","amsterdam","anaheim","apac-championship-brisbane","atlanta","auckland","bangkok","beijing","bengaluru","bilbao","birmingham","bologna","bordeaux","boston","brisbane","cancun","cape-town","cardiff","chicago","cologne","copenhagen","dallas","delhi","dublin","emea-london-olympia","fortaleza","frankfurt","gdansk","geneva","gent","glasgow","guadalajara","hamburg","hong-kong","houston","istanbul","johannesburg","katowice","las-vegas","lisboa","london-excel","london-olympia","maastricht","madrid","malaga","manchester","mechelen","melbourne","mexico-city","miami","monterrey","mumbai","nice","osaka","oslo","paris","paris-gp","perth","phoenix","poznan","rio-de-janeiro","rome","rotterdam","sao-paulo","seoul","shanghai","shenzhen","singapore","singapore-expo","stockholm","stuttgart","sydney","taipei","toronto","toulouse","turin","utrecht","valencia","vancouver","verona","vienna","warsaw","washington-dc","wuhan","yokohama"],
+  7: ["amsterdam","anaheim","atlanta","auckland","bangkok","barcelona","beijing","belgium","berlin","bilbao","birmingham","brisbane","cape-town","cardiff","chicago-navy-pier","ciudad-de-mexico","cologne","copenhagen","dallas","dublin","frankfurt","glasgow","guadalajara","hamburg","heerenveen","hong-kong","houston","incheon","johannesburg","johannesburg-i","karlsruhe","katowice","las-vegas","london","maastricht","madrid","malaga","manchester","marseille","melbourne","miami-beach","milan","monterrey","mumbai","new-york","nice","paris","perth","poznan","riga","rimini","rotterdam","shanghai","sharjah","singapore","singapore-national-stadium","stockholm","stuttgart","sydney","taipei","toronto","toulouse","vienna","warsaw"],
+  6: ["amsterdam","barcelona","berlin","bilbao","birmingham","bordeaux","chicago","copenhagen","dallas","doha","dubai","dublin","fort-lauderdale","frankfurt","gdansk","glasgow","hamburg","hong-kong","houston","incheon","k-ln","karlsruhe","katowice","london","los-angeles","m-nchen","maastricht","madrid","malaga","malm","manchester","melbourne","mexico-city","milan","new-york","paris","rimini","rotterdam","singapore","stockholm","sydney","taipei","turin","valencia","world-championships-nice"],
+  5: ["amsterdam","anaheim","barcelona","basel","berlin","bilbao","birmingham","chicago","dallas","essen","frankfurt","glasgow","hamburg","hannover","hong-kong","houston","k-ln","karlsruhe","leipzig","london","los-angeles","m-nchen","maastricht-european-championships","madrid","malaga","manchester","miami","new-york","rotterdam","stockholm","stuttgart","valencia","wien","world-championships-manchester"],
+  4: ["amsterdam","berlin","birmingham","bremen","chicago","dallas","essen","frankfurt","hamburg","karlsruhe","las-vegas","leipzig","london","los-angeles","m-nchen","maastricht","madrid","manchester","new-york","stuttgart","wien"],
+  3: ["austin","chicago","dallas","orlando"]
+};
+
+var STATIONS = [
+  {key:"run1",lbl:"Run 1"},{key:"skierg",lbl:"Ski Erg"},{key:"run2",lbl:"Run 2"},
+  {key:"sledpush",lbl:"Sled Push"},{key:"run3",lbl:"Run 3"},{key:"sledpull",lbl:"Sled Pull"},
+  {key:"run4",lbl:"Run 4"},{key:"burpeebroadjump",lbl:"Burpee Broad Jump"},{key:"run5",lbl:"Run 5"},
+  {key:"rowerg",lbl:"Row Erg"},{key:"run6",lbl:"Run 6"},{key:"farmerscarry",lbl:"Farmers Carry"},
+  {key:"run7",lbl:"Run 7"},{key:"sandbaglunges",lbl:"Sandbag Lunges"},{key:"run8",lbl:"Run 8"},
+  {key:"wallballs",lbl:"Wall Balls"}
+];
+
+var PALETTE = ["#2ecc71","#3498db","#8e44ad","#e67e22","#e74c3c","#1abc9c"];
+
+// ─── State ────────────────────────────────────────────────────────────────────
+var selLocs     = new Set();
+var searchResults = [];
+var pinned      = [];       // max 6
+var charts      = {};
+
+// ─── Server health ────────────────────────────────────────────────────────────
+var serverUp = false;
+async function checkServer() {
+  try {
+    var r = await fetch("http://localhost:8765/health", {signal: AbortSignal.timeout(2500)});
+    var d = await r.json();
+    serverUp = d.status === "ok";
+  } catch(e) { serverUp = false; }
+  var b = document.getElementById("srvBadge");
+  b.textContent = serverUp ? "⚡ HYROX server online" : "HYROX server offline";
+  b.className = "srv-badge " + (serverUp ? "srv-ok" : "srv-off");
+}
+checkServer();
+setInterval(checkServer, 15000);
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function fmtLoc(slug) {
+  return slug.replace(/-/g," ").replace(/\b\w/g,function(c){return c.toUpperCase();});
+}
+function toSec(t) {
+  if (!t || t==="N/A") return null;
+  var p = t.split(":").map(Number);
+  return p.length===3 ? p[0]*3600+p[1]*60+p[2] : p[0]*60+p[1];
+}
+function deltaSec(d) {
+  if (!d || d==="N/A") return null;
+  return (d[0]==="-"?-1:1)*toSec(d.replace(/^[+-]/,""));
+}
+function fmtSec(sec) {
+  if (sec===null||sec===undefined) return "?";
+  var a = Math.abs(sec);
+  return Math.floor(a/60)+":"+String(a%60).padStart(2,"0");
+}
+function heatCls(d) {
+  if (d===null) return "c-zero";
+  if (d<-90) return "c-fast3"; if (d<-30) return "c-fast2";
+  if (d<5)   return "c-fast1"; if (d<30)  return "c-zero";
+  if (d<60)  return "c-slow1"; return "c-slow2";
+}
+function findSp(splits,key) {
+  if (!splits) return null;
+  return splits.find(function(s){ return s.station.replace(/\s/g,"").toLowerCase()===key; });
+}
+function pill(t,c) { return '<span class="pill '+c+'">'+t+'</span>'; }
+function dc(id) { if(charts[id]){charts[id].destroy();delete charts[id];} }
+
+// ─── Location picker ──────────────────────────────────────────────────────────
+function getLocs() { return SEASON_LOCS[+document.getElementById("seasonSel").value] || []; }
+
+document.getElementById("seasonSel").addEventListener("change", function(){
+  selLocs.clear(); renderChips(); updBtn();
+});
+
+function toggleLocPicker() {
+  var el = document.getElementById("locPicker");
+  var open = el.style.display !== "none";
+  el.style.display = open ? "none" : "block";
+  if (!open) { document.getElementById("locFilter").value=""; renderChips(); }
+}
+
+function renderChips() {
+  var filter = document.getElementById("locFilter").value.toLowerCase().trim();
+  var locs = getLocs().filter(function(l){ return !filter || l.includes(filter); });
+  document.getElementById("locGrid").innerHTML = locs.map(function(l){
+    return '<div class="loc-chip'+(selLocs.has(l)?" sel":"")+'" onclick="toggleLoc(\''+l+'\')">'
+      +(selLocs.has(l)?"✓ ":"")+fmtLoc(l)+'</div>';
+  }).join("") || '<span style="color:#bbb;font-size:0.82rem">No matches</span>';
+  document.getElementById("selCount").textContent = selLocs.size+" selected";
+}
+
+function toggleLoc(l) {
+  selLocs.has(l) ? selLocs.delete(l) : selLocs.add(l);
+  renderChips(); updBtn();
+}
+function selectAll() { getLocs().forEach(function(l){ selLocs.add(l); }); renderChips(); updBtn(); }
+function clearAll()  { selLocs.clear(); renderChips(); updBtn(); }
+function updBtn() {
+  document.getElementById("locToggle").textContent = "📍 Races ("+selLocs.size+" selected)";
+}
+
+// ─── MCP lookup ───────────────────────────────────────────────────────────────
+function athleteName(r) {
+  return r.athlete || r.athlete_name || r.name || "Athlete";
+}
+
+// ─── HYROX lookup via local proxy server ─────────────────────────────────────
+// The hyrox-results MCP plugin is local and can't be called from artifact JS.
+// The local Python server (localhost:8765) exposes /hyrox/lookup which uses
+// pyrox-client directly — same data, no plugin proxy needed.
+async function lookupAthlete(loc, last, first, season, gender, division) {
+  try {
+    var body = {last_name: last, season: parseInt(season), location: loc};
+    if (first)    body.first_name = first;
+    if (gender)   body.gender     = gender;
+    if (division) body.division   = division;
+
+    var res = await fetch("http://localhost:8765/hyrox/lookup", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30000),
+    });
+    var data = await res.json();
+
+    if (!data.success) return null;           // athlete not found at this location
+    return data.results || null;
+  } catch(e) {
+    console.warn("lookup failed:", loc, e);
+    return null;
+  }
+}
+
+// ─── Search ───────────────────────────────────────────────────────────────────
+async function doSearch() {
+  var last  = document.getElementById("lastName").value.trim();
+  var first = document.getElementById("firstName").value.trim();
+  var season = document.getElementById("seasonSel").value;
+  var gender = document.getElementById("genderSel").value;
+  var div    = document.getElementById("divisionSel").value;
+
+  if (!last) { alert("Last name is required."); return; }
+  if (selLocs.size === 0) { alert("Select at least one race location."); return; }
+
+  var locs = Array.from(selLocs);
+
+  var btn = document.getElementById("searchBtn");
+  btn.disabled = true; btn.textContent = "Searching…";
+  var msg = document.getElementById("searchMsg");
+  msg.style.display = "block";
+  msg.textContent = "Searching "+locs.length+" race"+(locs.length>1?"s":"")+"…";
+  document.getElementById("resultsSection").style.display = "none";
+
+  var results = await Promise.all(locs.map(function(loc){
+    return lookupAthlete(loc, last, first, season, gender, div)
+      .then(function(res){ return {loc:loc, season:parseInt(season), athletes: res||[]}; });
+  }));
+
+  // Flatten: one entry per athlete-per-race, but only where name actually matches.
+  // The MCP does nearest-match, not exact, so it returns *something* for every
+  // location. We must verify the returned athlete's name contains the search terms.
+  var searchLast  = last.toLowerCase();
+  var searchFirst = first.toLowerCase();
+  searchResults = [];
+  results.forEach(function(item){
+    (item.athletes || []).forEach(function(a){
+      var returned = athleteName(a).toLowerCase();
+      if (!returned.includes(searchLast)) return;           // last name must match
+      if (searchFirst && !returned.includes(searchFirst)) return; // first name if given
+      if (!a.total_time) return;                             // must have actual race data
+      searchResults.push({loc: item.loc, season: item.season, data: a});
+    });
+  });
+
+  btn.disabled = false; btn.textContent = "Search →";
+  msg.textContent = "Found "+searchResults.length+" result"+(searchResults.length!==1?"s":"")+
+    " across "+locs.length+" race"+(locs.length!==1?"s":"")+" searched.";
+  renderResults();
+}
+
+// ─── Render results ───────────────────────────────────────────────────────────
+function renderResults() {
+  var section = document.getElementById("resultsSection");
+  document.getElementById("resultsBadge").textContent = searchResults.length;
+
+  // Only show results section if there are actual results
+  if (!searchResults.length) {
+    section.style.display = "none";
+    return;
+  }
+
+  var html = searchResults.map(function(item, idx){
+    var r = item.data, b = r.benchmarks || {};
+    var name = athleteName(r);
+    var g10 = deltaSec(b.gap_to_top_10);
+    var gCls = (g10!==null && g10<0) ? "green" : "red";
+    var col  = PALETTE[idx % PALETTE.length];
+    var id   = item.loc+"_"+item.season+"_"+name.replace(/\s/g,"_");
+    var alreadyPinned = pinned.some(function(p){ return p.id===id; });
+
+    var miniHeat = (r.splits||[]).slice(0,16).map(function(sp){
+      return '<div class="mh '+heatCls(deltaSec(sp.vs_median))+'" title="'+sp.station+': '+sp.time+'"></div>';
+    }).join("");
+
+    return '<div class="rcard">'
+      +'<div class="rcard-bar" style="background:'+col+'"></div>'
+      +'<div class="rcard-name">'+name+'</div>'
+      +'<div class="rcard-loc">'+fmtLoc(item.loc)+' &middot; Season '+item.season+'</div>'
+      +'<div class="rcard-time" style="color:'+col+'">'+r.total_time+'</div>'
+      +'<div class="rcard-div">'+(r.division||"")+'</div>'
+      +'<div class="rcard-metrics">'
+      +'<div class="rm"><div class="v blue">'+(b.top_percent||"—")+'<small>th</small></div><div class="l">Percentile</div></div>'
+      +'<div class="rm"><div class="v '+gCls+'">'+(b.gap_to_top_10||"—")+'</div><div class="l">vs Top 10%</div></div>'
+      +'<div class="rm"><div class="v">'+(r.field_size?r.field_size.toLocaleString():"—")+'</div><div class="l">Finishers</div></div>'
+      +'</div>'
+      +'<div class="mini-heat">'+miniHeat+'</div>'
+      +(alreadyPinned
+        ? '<button class="btn-sm" disabled>✓ Pinned</button>'
+        : '<button class="btn-pin" onclick="pinRace('+idx+')">📌 Pin</button>'
+      )
+      +'</div>';
+  }).join("");
+
+  document.getElementById("resultsGrid").innerHTML = html;
+  section.style.display = "block";
+}
+
+// ─── Pin system ───────────────────────────────────────────────────────────────
+function pinRace(idx) {
+  if (pinned.length >= 6) { alert("Max 6 races. Unpin one first."); return; }
+  var item = searchResults[idx];
+  var r    = item.data;
+  var name = athleteName(r);
+  var id   = item.loc+"_"+item.season+"_"+name.replace(/\s/g,"_");
+  if (pinned.some(function(p){ return p.id===id; })) return;
+
+  pinned.push({
+    id:           id,
+    loc:          item.loc,
+    locLabel:     fmtLoc(item.loc),
+    season:       item.season,
+    athleteName:  name,
+    division:     r.division || "",
+    total_time:   r.total_time,
+    field_size:   r.field_size,
+    benchmarks:   r.benchmarks || {},
+    splits:       r.splits || [],
+    raceDate:     r.date || r.race_date || null,
+    color:        PALETTE[(pinned.length) % PALETTE.length],
+  });
+
+  renderResults();
+  renderComparison();
+}
+
+function unpin(id) {
+  pinned = pinned.filter(function(p){ return p.id!==id; });
+  pinned.forEach(function(p,i){ p.color = PALETTE[i % PALETTE.length]; });
+  renderResults();
+  renderComparison();
+}
+
+// ─── Comparison ───────────────────────────────────────────────────────────────
+function renderComparison() {
+  var comp = document.getElementById("compSection");
+  if (!pinned.length) { comp.style.display = "none"; return; }
+  comp.style.display = "block";
+  document.getElementById("pinnedBadge").textContent = pinned.length+" / 6";
+
+  // Tray chips
+  document.getElementById("pinTray").innerHTML = pinned.map(function(p){
+    return '<div class="pin-chip" style="border-color:'+p.color+';color:'+p.color+'">'
+      +'<span>'+p.athleteName+' &middot; '+p.locLabel+' S'+p.season+'</span>'
+      +'<button class="pin-chip-x" onclick="unpin(\''+p.id+'\')" title="Unpin">&times;</button>'
+      +'</div>';
+  }).join("");
+
+  // Detail cards
+  document.getElementById("pinnedGrid").innerHTML = pinned.map(function(p){
+    var b = p.benchmarks;
+    var g10 = deltaSec(b.gap_to_top_10);
+    var gCls = (g10!==null && g10<0) ? "green" : "red";
+    return '<div class="pcard" style="border-color:'+p.color+'">'
+      +'<div class="pcard-hdr">'
+      +'<div><div class="pcard-name" style="color:'+p.color+'">'+p.athleteName+'</div>'
+      +'<div class="pcard-loc">'+p.locLabel+' &middot; S'+p.season+' &middot; '+p.division+'</div></div>'
+      +'<button class="btn-sm" onclick="unpin(\''+p.id+'\')">×</button>'
+      +'</div>'
+      +'<div class="pcard-time" style="color:'+p.color+'">'+p.total_time+'</div>'
+      +'<div class="pcard-rank">'+(b.top_percent?b.top_percent+'th percentile &middot; ':'')+''
+      +(p.field_size?p.field_size.toLocaleString()+' finishers':'')+'</div>'
+      +'<div class="pcard-benchmarks">'
+      +'<div class="pb-m"><div class="v '+gCls+'">'+(b.gap_to_top_10||"—")+'</div><div class="l">vs Top 10%</div></div>'
+      +'<div class="pb-m"><div class="v">'+(b.top_10_pct||"—")+'</div><div class="l">Top 10% time</div></div>'
+      +'<div class="pb-m"><div class="v">'+(b.median||"—")+'</div><div class="l">Median</div></div>'
+      +'</div>'
+      +'</div>';
+  }).join("");
+
+  renderHeatmap();
+  renderGapChart();
+}
+
+// ─── Heatmap ──────────────────────────────────────────────────────────────────
+function renderHeatmap() {
+  var html = "<thead><tr><th class='sc'>Station</th>";
+  pinned.forEach(function(p){
+    html += "<th style='color:"+p.color+"'>"+p.athleteName
+      +"<br><small style='color:#bbb;font-weight:400'>"+p.locLabel+" S"+p.season+"</small>"
+      +"<br><span style='font-weight:400'>"+p.total_time+"</span></th>";
+  });
+  html += "</tr></thead><tbody>";
+  STATIONS.forEach(function(st){
+    html += "<tr><td class='sn'>"+st.lbl+"</td>";
+    pinned.forEach(function(p){
+      var sp = findSp(p.splits, st.key);
+      if (!sp) { html += "<td class='c-zero'>—</td>"; return; }
+      var d = deltaSec(sp.vs_median);
+      html += "<td class='"+heatCls(d)+"' title='"+st.lbl+": "+sp.time+" ("+sp.vs_median+" vs median)'>"+sp.time+"</td>";
+    });
+    html += "</tr>";
+  });
+  document.getElementById("heatmap").innerHTML = html+"</tbody>";
+}
+
+// ─── Gap chart ────────────────────────────────────────────────────────────────
+function renderGapChart() {
+  dc("gap");
+  charts["gap"] = new Chart(document.getElementById("gapChart").getContext("2d"), {
+    type: "bar",
+    data: {
+      labels: STATIONS.map(function(s){ return s.lbl; }),
+      datasets: pinned.map(function(p){
+        return {
+          label: p.athleteName+" ("+p.locLabel+" S"+p.season+")",
+          data: STATIONS.map(function(st){
+            var sp = findSp(p.splits, st.key);
+            if (!sp) return null;
+            var s = deltaSec(sp.vs_top_10);
+            return s!==null ? +(s/60).toFixed(3) : null;
+          }),
+          backgroundColor: p.color+"99", borderColor: p.color, borderWidth:1, borderRadius:3
+        };
+      })
+    },
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{labels:{font:{size:10},boxWidth:12}},
+        tooltip:{callbacks:{label:function(item){
+          if(item.raw===null) return null;
+          var s=Math.round(Math.abs(item.raw)*60);
+          return item.dataset.label+": "+(item.raw<0?"-":"+")+fmtSec(s)+" vs top 10%";
+        }}}
+      },
+      scales:{
+        y:{ticks:{callback:function(v){var s=Math.round(Math.abs(v)*60);return(v<0?"-":"+")+fmtSec(s);},font:{size:10}},
+          title:{display:true,text:"Gap vs Top 10%",font:{size:10},color:"#bbb"}},
+        x:{ticks:{font:{size:10},maxRotation:35}}
+      }
+    }
+  });
+}
+
+</script>
+</body>
+</html>
