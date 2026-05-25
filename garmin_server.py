@@ -11,6 +11,7 @@ Start:  python garmin_server.py
 
 import json
 import os
+import traceback
 from typing import Optional
 
 from fastapi import FastAPI
@@ -20,7 +21,7 @@ from pydantic import BaseModel
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-app = FastAPI(title="HYROX Coaching Proxy", version="3.0.0")
+app = FastAPI(title="HYROX Coaching Proxy", version="3.0.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -31,7 +32,7 @@ app.add_middleware(
 )
 
 
-# ── HYROX ────────────────────────────────────────────────────────────────────
+# ── HYROX ────────────────────────────────────────────────────────────────────────────
 
 _pyrox_client = None
 _race_cache: dict = {}   # key: (season, location, gender, division) → DataFrame
@@ -40,7 +41,9 @@ def get_pyrox():
     global _pyrox_client
     if _pyrox_client is None:
         import pyrox
+        print("[pyrox] initialising PyroxClient...")
         _pyrox_client = pyrox.PyroxClient()
+        print("[pyrox] PyroxClient ready")
     return _pyrox_client
 
 
@@ -48,9 +51,12 @@ def get_race_df(season: int, location: str, gender=None, division=None):
     key = (season, location, gender or "", division or "")
     if key not in _race_cache:
         client = get_pyrox()
+        print(f"[pyrox] fetching race: season={season} location={location}")
         _race_cache[key] = client.get_race(
             season=season, location=location, gender=gender, division=division
         )
+        df = _race_cache[key]
+        print(f"[pyrox] got {len(df)} rows, columns: {list(df.columns)[:8]}")
     return _race_cache[key]
 
 
@@ -190,7 +196,29 @@ def serve_dashboard():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "hyrox-coaching-proxy", "port": 8765}
+    return {"status": "ok", "service": "hyrox-coaching-proxy", "version": "3.0.1"}
+
+
+@app.get("/debug")
+def debug_lookup():
+    """Test endpoint: runs a real pyrox lookup and returns full result or error traceback."""
+    try:
+        import pyrox
+        print("[debug] pyrox version:", getattr(pyrox, '__version__', 'unknown'))
+        client = pyrox.PyroxClient()
+        print("[debug] client created, fetching sydney S8...")
+        df = client.get_race(season=8, location="sydney")
+        print(f"[debug] got {len(df)} rows")
+        return {
+            "status": "ok",
+            "rows": len(df),
+            "columns": list(df.columns),
+            "sample": df.head(2).to_dict(orient="records"),
+        }
+    except Exception as e:
+        tb = traceback.format_exc()
+        print("[debug] ERROR:", tb)
+        return {"status": "error", "error": str(e), "traceback": tb}
 
 
 @app.post("/hyrox/lookup")
@@ -203,8 +231,6 @@ async def hyrox_lookup(req: HyroxRequest):
         if not name_col:
             return {"success": False, "error": "Could not detect athlete name column in dataset."}
 
-        # Search each name part independently — handles "Last First", "First Last",
-        # "LAST FIRST", doubles entries like "Williams, Kirstee Hoath", etc.
         col  = df[name_col].str.lower()
         mask = col.str.contains(req.last_name.lower(), na=False)
         if req.first_name:
@@ -224,7 +250,9 @@ async def hyrox_lookup(req: HyroxRequest):
         return {"success": True, "results": results if len(results) > 1 else [results[0]]}
 
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        tb = traceback.format_exc()
+        print(f"[lookup ERROR] {req.location} S{req.season}: {e}\n{tb}")
+        return {"success": False, "error": str(e), "traceback": tb}
 
 
 if __name__ == "__main__":
@@ -233,6 +261,7 @@ if __name__ == "__main__":
     print("  HYROX Coaching Dashboard — Local Proxy Server v3")
     print("  Dashboard: http://localhost:8765/")
     print("  Health:    GET  /health")
+    print("  Debug:     GET  /debug")
     print("  HYROX:     POST /hyrox/lookup")
     print("  Press Ctrl+C to stop")
     print("=" * 55)
