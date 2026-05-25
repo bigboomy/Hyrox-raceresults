@@ -264,10 +264,12 @@ var pinned      = [];       // max 6
 var charts      = {};
 
 // ─── Server health ────────────────────────────────────────────────────────────
+// Relative URL: works on Render (https://hyrox-raceresults.onrender.com/health)
+// and locally (http://localhost:8765/health) without any hardcoding.
 var serverUp = false;
 async function checkServer() {
   try {
-    var r = await fetch("http://localhost:8765/health", {signal: AbortSignal.timeout(2500)});
+    var r = await fetch("/health", {signal: AbortSignal.timeout(2500)});
     var d = await r.json();
     serverUp = d.status === "ok";
   } catch(e) { serverUp = false; }
@@ -327,7 +329,7 @@ function renderChips() {
   var filter = document.getElementById("locFilter").value.toLowerCase().trim();
   var locs = getLocs().filter(function(l){ return !filter || l.includes(filter); });
   document.getElementById("locGrid").innerHTML = locs.map(function(l){
-    return '<div class="loc-chip'+(selLocs.has(l)?" sel":"")+'" onclick="toggleLoc(\''+l+'\')">'
+    return '<div class="loc-chip'+(selLocs.has(l)?" sel":"")'" onclick="toggleLoc(\''+l+'\')">'
       +(selLocs.has(l)?"✓ ":"")+fmtLoc(l)+'</div>';
   }).join("") || '<span style="color:#bbb;font-size:0.82rem">No matches</span>';
   document.getElementById("selCount").textContent = selLocs.size+" selected";
@@ -348,10 +350,9 @@ function athleteName(r) {
   return r.athlete || r.athlete_name || r.name || "Athlete";
 }
 
-// ─── HYROX lookup via local proxy server ─────────────────────────────────────
-// The hyrox-results MCP plugin is local and can't be called from artifact JS.
-// The local Python server (localhost:8765) exposes /hyrox/lookup which uses
-// pyrox-client directly — same data, no plugin proxy needed.
+// ─── HYROX lookup via server ──────────────────────────────────────────────────
+// Relative URL: calls /hyrox/lookup on whatever server is hosting this page.
+// Works on Render and locally (http://localhost:8765) without any changes.
 async function lookupAthlete(loc, last, first, season, gender, division) {
   try {
     var body = {last_name: last, season: parseInt(season), location: loc};
@@ -359,7 +360,7 @@ async function lookupAthlete(loc, last, first, season, gender, division) {
     if (gender)   body.gender     = gender;
     if (division) body.division   = division;
 
-    var res = await fetch("http://localhost:8765/hyrox/lookup", {
+    var res = await fetch("/hyrox/lookup", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify(body),
@@ -397,7 +398,7 @@ async function doSearch() {
 
   var results = await Promise.all(locs.map(function(loc){
     return lookupAthlete(loc, last, first, season, gender, div)
-      .then(function(res){ return {loc:loc, season:parseInt(season), athletes: res||[]}; });
+      .then(function(res){ return {loc:loc, season:parseInt(season), athletes: res||}; });
   }));
 
   // Flatten: one entry per athlete-per-race, but only where name actually matches.
@@ -451,7 +452,7 @@ function renderResults() {
       +'<div class="rcard-name">'+name+'</div>'
       +'<div class="rcard-loc">'+fmtLoc(item.loc)+' &middot; Season '+item.season+'</div>'
       +'<div class="rcard-time" style="color:'+col+'">'+r.total_time+'</div>'
-      +'<div class="rcard-div">'+(r.division||"")+'</div>'
+      +'<div class="rcard-div">'+(r.division||"")+"</div>"
       +'<div class="rcard-metrics">'
       +'<div class="rm"><div class="v blue">'+(b.top_percent||"—")+'<small>th</small></div><div class="l">Percentile</div></div>'
       +'<div class="rm"><div class="v '+gCls+'">'+(b.gap_to_top_10||"—")+'</div><div class="l">vs Top 10%</div></div>'
@@ -531,8 +532,8 @@ function renderComparison() {
       +'<button class="btn-sm" onclick="unpin(\''+p.id+'\')">×</button>'
       +'</div>'
       +'<div class="pcard-time" style="color:'+p.color+'">'+p.total_time+'</div>'
-      +'<div class="pcard-rank">'+(b.top_percent?b.top_percent+'th percentile &middot; ':'')+''
-      +(p.field_size?p.field_size.toLocaleString()+' finishers':'')+'</div>'
+      +'<div class="pcard-rank">'+(b.top_percent?b.top_percent+'th percentile &middot; ':'')+""
+      +(p.field_size?p.field_size.toLocaleString()+' finishers':'')+"</div>"
       +'<div class="pcard-benchmarks">'
       +'<div class="pb-m"><div class="v '+gCls+'">'+(b.gap_to_top_10||"—")+'</div><div class="l">vs Top 10%</div></div>'
       +'<div class="pb-m"><div class="v">'+(b.top_10_pct||"—")+'</div><div class="l">Top 10% time</div></div>'
