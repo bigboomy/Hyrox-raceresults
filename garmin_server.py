@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-app = FastAPI(title="HYROX Coaching Proxy", version="3.1.0")
+app = FastAPI(title="HYROX Coaching Proxy", version="3.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -186,20 +186,24 @@ class HyroxRequest(BaseModel):
 
 
 class HyroxSearchAllRequest(BaseModel):
-    last_name:  str
-    first_name: Optional[str] = None
-    season:     int
-    locations:  list
-    gender:     Optional[str] = None
-    division:   Optional[str] = None
+    last_name:          str
+    first_name:         Optional[str] = None
+    season:             int
+    locations:          list
+    gender:             Optional[str] = None
+    division:           Optional[str] = None
+    partner_last_name:  Optional[str] = None   # for doubles — search by either athlete
+    partner_first_name: Optional[str] = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper for parallel search
 # ─────────────────────────────────────────────────────────────────────────────
 
-def lookup_one_sync(loc: str, last_name: str, first_name, season: int, gender, division):
-    """Synchronous single-location lookup — safe to run via asyncio.to_thread."""
+def lookup_one_sync(loc: str, last_name: str, first_name, season: int, gender, division,
+                    partner_last=None, partner_first=None):
+    """Synchronous single-location lookup — safe to run via asyncio.to_thread.
+    If partner_last is provided, returns results matching EITHER athlete (handles doubles)."""
     try:
         df   = get_race_df(season, loc, gender, division)
         cols = detect_columns(df)
@@ -207,9 +211,19 @@ def lookup_one_sync(loc: str, last_name: str, first_name, season: int, gender, d
         if not name_col:
             return []
         col  = df[name_col].str.lower()
+
+        # Primary athlete mask
         mask = col.str.contains(last_name.lower(), na=False)
         if first_name:
             mask = mask & col.str.contains(first_name.lower(), na=False)
+
+        # Partner mask — OR'd in so doubles results surface under either name
+        if partner_last:
+            pmask = col.str.contains(partner_last.lower(), na=False)
+            if partner_first:
+                pmask = pmask & col.str.contains(partner_first.lower(), na=False)
+            mask = mask | pmask
+
         athlete_rows = df[mask]
         if athlete_rows.empty:
             return []
@@ -217,7 +231,7 @@ def lookup_one_sync(loc: str, last_name: str, first_name, season: int, gender, d
         for i in range(len(athlete_rows)):
             row = athlete_rows.iloc[[i]]
             r   = build_result(row, df, cols, season, loc)
-            r["location"] = loc   # slug form, used by JS fmtLoc()
+            r["location"] = loc
             results.append(r)
         return results
     except Exception as e:
@@ -238,7 +252,7 @@ def serve_dashboard():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "hyrox-coaching-proxy", "version": "3.1.0"}
+    return {"status": "ok", "service": "hyrox-coaching-proxy", "version": "3.2.0"}
 
 
 @app.get("/debug")
@@ -301,12 +315,13 @@ def search_test(last: str = "Williams", first: str = "Mitch", season: int = 8, l
 async def hyrox_search_all(req: HyroxSearchAllRequest):
     """
     Search multiple race locations in parallel (one request, server does the fan-out).
-    This replaces the old pattern of 85 parallel client-side requests.
+    Partner name fields enable doubles race discovery under either athlete's name.
     """
     tasks = [
         asyncio.to_thread(
             lookup_one_sync,
-            loc, req.last_name, req.first_name, req.season, req.gender, req.division
+            loc, req.last_name, req.first_name, req.season, req.gender, req.division,
+            req.partner_last_name, req.partner_first_name
         )
         for loc in req.locations
     ]
@@ -353,12 +368,12 @@ async def hyrox_lookup(req: HyroxRequest):
 if __name__ == "__main__":
     import uvicorn
     print("=" * 55)
-    print("  HYROX Coaching Dashboard — Local Proxy Server v3.1")
+    print("  HYROX Coaching Dashboard — Local Proxy Server v3.2")
     print("  Dashboard: http://localhost:8765/")
     print("  Health:    GET  /health")
     print("  Debug:     GET  /debug")
     print("  Search:    GET  /search-test?last=Williams&first=Mitch")
-    print("  HYROX:     POST /hyrox/search-all  (multi-location)")
+    print("  HYROX:     POST /hyrox/search-all  (multi-location + partner)")
     print("  Press Ctrl+C to stop")
     print("=" * 55)
     uvicorn.run(app, host="127.0.0.1", port=8765, log_level="warning")
