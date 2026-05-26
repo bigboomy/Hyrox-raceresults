@@ -121,8 +121,10 @@ code { background:#f4f4f4; padding:1px 5px; border-radius:4px; font-size:0.82rem
 <div class="section">
   <h2>Athlete Search</h2>
   <div class="search-row">
-    <input id="lastName"   class="input" placeholder="Last name *" style="max-width:160px">
-    <input id="firstName"  class="input" placeholder="First name"  style="max-width:140px">
+    <input id="lastName"   class="input" placeholder="Last name *"   style="max-width:150px">
+    <input id="firstName"  class="input" placeholder="First name"    style="max-width:130px">
+    <input id="partnerLast"  class="input" placeholder="Partner last (doubles)" style="max-width:180px">
+    <input id="partnerFirst" class="input" placeholder="Partner first"          style="max-width:130px">
     <select id="seasonSel" class="input" style="max-width:185px">
       <option value="8">Season 8 (2025-26)</option>
       <option value="7">Season 7 (2024-25)</option>
@@ -294,8 +296,8 @@ function renderChips() {
   var locs = getLocs().filter(function(l){ return !filter || l.includes(filter); });
   document.getElementById("locGrid").innerHTML = locs.map(function(l){
     var sel = selLocs.has(l);
-    return '<div class="loc-chip' + (sel ? " sel" : "") + '" onclick="toggleLoc(\'' + l + '\')">' +
-      (sel ? "✓ " : "") + fmtLoc(l) + '</div>';
+    return '<div class="loc-chip' + (sel ? " sel" : "") + '" onclick="toggleLoc(\'' + l + '\')">'
+      + (sel ? "✓ " : "") + fmtLoc(l) + '</div>';
   }).join("") || '<span style="color:#bbb;font-size:0.82rem">No matches</span>';
   document.getElementById("selCount").textContent = selLocs.size+" selected";
 }
@@ -314,13 +316,11 @@ function athleteName(r) {
   return r.athlete || r.athlete_name || r.name || "Athlete";
 }
 
-/* Single-request search: one POST to /hyrox/search-all
-   Server fans out to all locations in parallel via asyncio.to_thread.
-   Old pattern (85 parallel client requests) caused sequential event-loop
-   blocking, timing out before most locations completed. */
 async function doSearch() {
-  var last   = document.getElementById("lastName").value.trim();
-  var first  = document.getElementById("firstName").value.trim();
+  var last        = document.getElementById("lastName").value.trim();
+  var first       = document.getElementById("firstName").value.trim();
+  var partnerLast = document.getElementById("partnerLast").value.trim();
+  var partnerFirst= document.getElementById("partnerFirst").value.trim();
   var season = document.getElementById("seasonSel").value;
   var gender = document.getElementById("genderSel").value;
   var div    = document.getElementById("divisionSel").value;
@@ -340,9 +340,11 @@ async function doSearch() {
   searchResults = [];
   try {
     var body = {last_name: last, season: parseInt(season), locations: locs};
-    if (first)  body.first_name = first;
-    if (gender) body.gender     = gender;
-    if (div)    body.division   = div;
+    if (first)        body.first_name         = first;
+    if (partnerLast)  body.partner_last_name  = partnerLast;
+    if (partnerFirst) body.partner_first_name = partnerFirst;
+    if (gender)       body.gender             = gender;
+    if (div)          body.division           = div;
 
     var res  = await fetch("/hyrox/search-all", {
       method:  "POST",
@@ -407,7 +409,7 @@ function renderResults() {
       +'<div class="mini-heat">'+miniHeat+'</div>'
       +(alreadyPinned
         ? '<button class="btn-sm" disabled>✓ Pinned</button>'
-        : '<button class="btn-pin" onclick="pinRace('+idx+')">📌 Pin</button>')
+        : '<button class="btn-pin" onclick="pinRace('+idx+')">&#128204; Pin</button>')
       +'</div>';
   }).join("");
 
@@ -458,7 +460,7 @@ function renderComparison() {
   document.getElementById("pinTray").innerHTML = pinned.map(function(p){
     return '<div class="pin-chip" style="border-color:'+p.color+';color:'+p.color+'">'
       +'<span>'+p.athleteName+' &middot; '+p.locLabel+' S'+p.season+'</span>'
-      +'<button class="pin-chip-x" onclick="unpin(\'' + p.id + '\')" title="Unpin">&times;</button>'
+      +'<button class="pin-chip-x" onclick="unpin(\''+ p.id +'\')" title="Unpin">&times;</button>'
       +'</div>';
   }).join("");
 
@@ -470,7 +472,7 @@ function renderComparison() {
       +'<div class="pcard-hdr">'
       +'<div><div class="pcard-name" style="color:'+p.color+'">'+p.athleteName+'</div>'
       +'<div class="pcard-loc">'+p.locLabel+' &middot; S'+p.season+' &middot; '+p.division+'</div></div>'
-      +'<button class="btn-sm" onclick="unpin(\'' + p.id + '\')">&times;</button>'
+      +'<button class="btn-sm" onclick="unpin(\''+ p.id +'\')">&times;</button>'
       +'</div>'
       +'<div class="pcard-time" style="color:'+p.color+'">'+p.total_time+'</div>'
       +'<div class="pcard-rank">'+(b.top_percent?b.top_percent+'th percentile &middot; ':'')
