@@ -294,7 +294,8 @@ function renderChips() {
   var locs = getLocs().filter(function(l){ return !filter || l.includes(filter); });
   document.getElementById("locGrid").innerHTML = locs.map(function(l){
     var sel = selLocs.has(l);
-    return '<div class="loc-chip' + (sel ? " sel" : "") + '" onclick="toggleLoc(\'' + l + '\')">' + (sel ? "✓ " : "") + fmtLoc(l) + '</div>';
+    return '<div class="loc-chip' + (sel ? " sel" : "") + '" onclick="toggleLoc(\'' + l + '\')">' +
+      (sel ? "✓ " : "") + fmtLoc(l) + '</div>';
   }).join("") || '<span style="color:#bbb;font-size:0.82rem">No matches</span>';
   document.getElementById("selCount").textContent = selLocs.size+" selected";
 }
@@ -306,38 +307,20 @@ function toggleLoc(l) {
 function selectAll() { getLocs().forEach(function(l){ selLocs.add(l); }); renderChips(); updBtn(); }
 function clearAll()  { selLocs.clear(); renderChips(); updBtn(); }
 function updBtn() {
-  document.getElementById("locToggle").textContent = "Ὄd Races ("+selLocs.size+" selected)";
+  document.getElementById("locToggle").innerHTML = "&#128205; Races ("+selLocs.size+" selected)";
 }
 
 function athleteName(r) {
   return r.athlete || r.athlete_name || r.name || "Athlete";
 }
 
-async function lookupAthlete(loc, last, first, season, gender, division) {
-  try {
-    var body = {last_name: last, season: parseInt(season), location: loc};
-    if (first)    body.first_name = first;
-    if (gender)   body.gender     = gender;
-    if (division) body.division   = division;
-
-    var res = await fetch("/hyrox/lookup", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30000),
-    });
-    var data = await res.json();
-    if (!data.success) return null;
-    return data.results || null;
-  } catch(e) {
-    console.warn("lookup failed:", loc, e);
-    return null;
-  }
-}
-
+/* Single-request search: one POST to /hyrox/search-all
+   Server fans out to all locations in parallel via asyncio.to_thread.
+   Old pattern (85 parallel client requests) caused sequential event-loop
+   blocking, timing out before most locations completed. */
 async function doSearch() {
-  var last  = document.getElementById("lastName").value.trim();
-  var first = document.getElementById("firstName").value.trim();
+  var last   = document.getElementById("lastName").value.trim();
+  var first  = document.getElementById("firstName").value.trim();
   var season = document.getElementById("seasonSel").value;
   var gender = document.getElementById("genderSel").value;
   var div    = document.getElementById("divisionSel").value;
@@ -346,32 +329,48 @@ async function doSearch() {
   if (selLocs.size === 0) { alert("Select at least one race location."); return; }
 
   var locs = Array.from(selLocs);
-  var btn = document.getElementById("searchBtn");
-  btn.disabled = true; btn.textContent = "Searching...";
-  var msg = document.getElementById("searchMsg");
+  var btn  = document.getElementById("searchBtn");
+  var msg  = document.getElementById("searchMsg");
+  btn.disabled = true;
+  btn.textContent = "Searching...";
   msg.style.display = "block";
-  msg.textContent = "Searching "+locs.length+" race"+(locs.length>1?"s":"")+"...";
+  msg.textContent = "Searching "+locs.length+" race"+(locs.length>1?"s":"")+" — may take up to a minute on first run while data loads...";
   document.getElementById("resultsSection").style.display = "none";
 
-  var results = await Promise.all(locs.map(function(loc){
-    return lookupAthlete(loc, last, first, season, gender, div)
-      .then(function(res){ return {loc:loc, season:parseInt(season), athletes: res||[]}; });
-  }));
-
-  var searchLast  = last.toLowerCase();
-  var searchFirst = first.toLowerCase();
   searchResults = [];
-  results.forEach(function(item){
-    (item.athletes || []).forEach(function(a){
-      var returned = athleteName(a).toLowerCase();
-      if (!returned.includes(searchLast)) return;
-      if (searchFirst && !returned.includes(searchFirst)) return;
-      if (!a.total_time) return;
-      searchResults.push({loc: item.loc, season: item.season, data: a});
-    });
-  });
+  try {
+    var body = {last_name: last, season: parseInt(season), locations: locs};
+    if (first)  body.first_name = first;
+    if (gender) body.gender     = gender;
+    if (div)    body.division   = div;
 
-  btn.disabled = false; btn.textContent = "Search →";
+    var res  = await fetch("/hyrox/search-all", {
+      method:  "POST",
+      headers: {"Content-Type": "application/json"},
+      body:    JSON.stringify(body),
+      signal:  AbortSignal.timeout(120000),
+    });
+    var data = await res.json();
+
+    if (data.success && data.results) {
+      data.results.forEach(function(a) {
+        searchResults.push({
+          loc:    a.location || "",
+          season: parseInt(season),
+          data:   a,
+        });
+      });
+    }
+  } catch(e) {
+    console.error("Search error:", e);
+    msg.textContent = "Search failed: " + e.message;
+    btn.disabled = false;
+    btn.textContent = "Search →";
+    return;
+  }
+
+  btn.disabled = false;
+  btn.textContent = "Search →";
   msg.textContent = "Found "+searchResults.length+" result"+(searchResults.length!==1?"s":"")+" across "+locs.length+" race"+(locs.length!==1?"s":"")+" searched.";
   renderResults();
 }
@@ -384,7 +383,7 @@ function renderResults() {
   var html = searchResults.map(function(item, idx){
     var r = item.data, b = r.benchmarks || {};
     var name = athleteName(r);
-    var g10 = deltaSec(b.gap_to_top_10);
+    var g10  = deltaSec(b.gap_to_top_10);
     var gCls = (g10!==null && g10<0) ? "green" : "red";
     var col  = PALETTE[idx % PALETTE.length];
     var id   = item.loc+"_"+item.season+"_"+name.replace(/\s/g,"_");
@@ -406,7 +405,9 @@ function renderResults() {
       +'<div class="rm"><div class="v">'+(r.field_size?r.field_size.toLocaleString():'&mdash;')+'</div><div class="l">Finishers</div></div>'
       +'</div>'
       +'<div class="mini-heat">'+miniHeat+'</div>'
-      +(alreadyPinned ? '<button class="btn-sm" disabled>✓ Pinned</button>' : '<button class="btn-pin" onclick="pinRace('+idx+')">Ὄc Pin</button>')
+      +(alreadyPinned
+        ? '<button class="btn-sm" disabled>✓ Pinned</button>'
+        : '<button class="btn-pin" onclick="pinRace('+idx+')">📌 Pin</button>')
       +'</div>';
   }).join("");
 
@@ -457,19 +458,19 @@ function renderComparison() {
   document.getElementById("pinTray").innerHTML = pinned.map(function(p){
     return '<div class="pin-chip" style="border-color:'+p.color+';color:'+p.color+'">'
       +'<span>'+p.athleteName+' &middot; '+p.locLabel+' S'+p.season+'</span>'
-      +'<button class="pin-chip-x" onclick="unpin(\''+p.id+'\')" title="Unpin">&times;</button>'
+      +'<button class="pin-chip-x" onclick="unpin(\'' + p.id + '\')" title="Unpin">&times;</button>'
       +'</div>';
   }).join("");
 
   document.getElementById("pinnedGrid").innerHTML = pinned.map(function(p){
     var b = p.benchmarks;
-    var g10 = deltaSec(b.gap_to_top_10);
+    var g10  = deltaSec(b.gap_to_top_10);
     var gCls = (g10!==null && g10<0) ? "green" : "red";
     return '<div class="pcard" style="border-color:'+p.color+'">'
       +'<div class="pcard-hdr">'
       +'<div><div class="pcard-name" style="color:'+p.color+'">'+p.athleteName+'</div>'
       +'<div class="pcard-loc">'+p.locLabel+' &middot; S'+p.season+' &middot; '+p.division+'</div></div>'
-      +'<button class="btn-sm" onclick="unpin(\''+p.id+'\')">&times;</button>'
+      +'<button class="btn-sm" onclick="unpin(\'' + p.id + '\')">&times;</button>'
       +'</div>'
       +'<div class="pcard-time" style="color:'+p.color+'">'+p.total_time+'</div>'
       +'<div class="pcard-rank">'+(b.top_percent?b.top_percent+'th percentile &middot; ':'')
