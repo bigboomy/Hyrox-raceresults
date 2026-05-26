@@ -3,8 +3,6 @@
 HYROX Coaching Dashboard — Local Proxy Server
 Port 8765.  Handles HYROX race lookups.
 
-HYROX race data cached in memory per (season, location) to avoid repeat fetches.
-
 Start:  python garmin_server.py
          (or double-click start_garmin_server.bat on Windows)
 """
@@ -21,7 +19,7 @@ from pydantic import BaseModel
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-app = FastAPI(title="HYROX Coaching Proxy", version="3.0.1")
+app = FastAPI(title="HYROX Coaching Proxy", version="3.0.2")
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,18 +30,14 @@ app.add_middleware(
 )
 
 
-# ── HYROX ────────────────────────────────────────────────────────────────────────────
-
 _pyrox_client = None
-_race_cache: dict = {}   # key: (season, location, gender, division) → DataFrame
+_race_cache: dict = {}
 
 def get_pyrox():
     global _pyrox_client
     if _pyrox_client is None:
         import pyrox
-        print("[pyrox] initialising PyroxClient...")
         _pyrox_client = pyrox.PyroxClient()
-        print("[pyrox] PyroxClient ready")
     return _pyrox_client
 
 
@@ -51,12 +45,11 @@ def get_race_df(season: int, location: str, gender=None, division=None):
     key = (season, location, gender or "", division or "")
     if key not in _race_cache:
         client = get_pyrox()
-        print(f"[pyrox] fetching race: season={season} location={location}")
+        print(f"[pyrox] fetching: season={season} location={location}")
         _race_cache[key] = client.get_race(
             season=season, location=location, gender=gender, division=division
         )
-        df = _race_cache[key]
-        print(f"[pyrox] got {len(df)} rows, columns: {list(df.columns)[:8]}")
+        print(f"[pyrox] got {len(_race_cache[key])} rows")
     return _race_cache[key]
 
 
@@ -142,12 +135,12 @@ def build_result(athlete_row, df, cols, season, location):
         vs_med = (float(av) - float(med)) if (av is not None and med is not None) else None
         vs_top = (float(av) - float(top)) if (av is not None and top is not None) else None
         splits.append({
-            "station":           col.replace("_time", "").replace("_", " ").title(),
-            "time":              fmt_time(av),
-            "median":            fmt_time(med),
-            "vs_median":         fmt_delta(vs_med),
-            "top_10_pct":        fmt_time(top),
-            "vs_top_10":         fmt_delta(vs_top),
+            "station":            col.replace("_time", "").replace("_", " ").title(),
+            "time":               fmt_time(av),
+            "median":             fmt_time(med),
+            "vs_median":          fmt_delta(vs_med),
+            "top_10_pct":         fmt_time(top),
+            "vs_top_10":          fmt_delta(vs_top),
             "faster_than_median": bool(vs_med is not None and vs_med < 0),
         })
 
@@ -156,11 +149,11 @@ def build_result(athlete_row, df, cols, season, location):
         faster_count    = (df[total_col] < float(total)).sum()
         percentile_rank = round((faster_count / field_size) * 100) if field_size else 0
         benchmarks = {
-            "top_percent":  100 - percentile_rank,
-            "median":       fmt_time(df[total_col].median()),
-            "top_25_pct":   fmt_time(df[total_col].quantile(0.25)),
-            "top_10_pct":   fmt_time(df[total_col].quantile(0.10)),
-            "top_5_pct":    fmt_time(df[total_col].quantile(0.05)),
+            "top_percent":   100 - percentile_rank,
+            "median":        fmt_time(df[total_col].median()),
+            "top_25_pct":    fmt_time(df[total_col].quantile(0.25)),
+            "top_10_pct":    fmt_time(df[total_col].quantile(0.10)),
+            "top_5_pct":     fmt_time(df[total_col].quantile(0.05)),
             "gap_to_median": fmt_delta(float(total) - float(df[total_col].median())),
             "gap_to_top_10": fmt_delta(float(total) - float(df[total_col].quantile(0.10))),
         }
@@ -196,19 +189,16 @@ def serve_dashboard():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "hyrox-coaching-proxy", "version": "3.0.1"}
+    return {"status": "ok", "service": "hyrox-coaching-proxy", "version": "3.0.2"}
 
 
 @app.get("/debug")
 def debug_lookup():
-    """Test endpoint: runs a real pyrox lookup and returns full result or error traceback."""
+    """Test endpoint: runs a real pyrox lookup for Sydney S8."""
     try:
         import pyrox
-        print("[debug] pyrox version:", getattr(pyrox, '__version__', 'unknown'))
         client = pyrox.PyroxClient()
-        print("[debug] client created, fetching sydney S8...")
         df = client.get_race(season=8, location="sydney")
-        print(f"[debug] got {len(df)} rows")
         return {
             "status": "ok",
             "rows": len(df),
@@ -216,9 +206,53 @@ def debug_lookup():
             "sample": df.head(2).to_dict(orient="records"),
         }
     except Exception as e:
-        tb = traceback.format_exc()
-        print("[debug] ERROR:", tb)
-        return {"status": "error", "error": str(e), "traceback": tb}
+        return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.get("/search-test")
+def search_test(last: str = "Williams", first: str = "Mitch", season: int = 8, location: str = "sydney"):
+    """Test endpoint: runs a full lookup + search and shows exactly what the dashboard JS receives."""
+    try:
+        df   = get_race_df(season, location)
+        cols = detect_columns(df)
+        name_col = cols.get("athlete_name")
+
+        if not name_col:
+            return {"error": "no name column detected", "all_columns": list(df.columns)}
+
+        # Show what names exist that contain the search term
+        col_series = df[name_col].str.lower()
+        last_matches  = df[col_series.str.contains(last.lower(), na=False)]
+        first_matches = last_matches[last_matches[name_col].str.lower().str.contains(first.lower(), na=False)] if first else last_matches
+
+        if first_matches.empty:
+            # show a sample of names so we can see the format
+            sample_names = df[name_col].head(20).tolist()
+            return {
+                "found": False,
+                "searched_last": last,
+                "searched_first": first,
+                "name_column": name_col,
+                "sample_names_in_db": sample_names,
+                "last_name_matches": last_matches[name_col].tolist()[:20],
+            }
+
+        results = []
+        for i in range(len(first_matches)):
+            row = first_matches.iloc[[i]]
+            results.append(build_result(row, df, cols, season, location))
+
+        return {
+            "found": True,
+            "count": len(results),
+            "results": results,
+            "js_would_see": {
+                "success": True,
+                "results": results,
+            }
+        }
+    except Exception as e:
+        return {"error": str(e), "traceback": traceback.format_exc()}
 
 
 @app.post("/hyrox/lookup")
@@ -252,7 +286,7 @@ async def hyrox_lookup(req: HyroxRequest):
     except Exception as e:
         tb = traceback.format_exc()
         print(f"[lookup ERROR] {req.location} S{req.season}: {e}\n{tb}")
-        return {"success": False, "error": str(e), "traceback": tb}
+        return {"success": False, "error": str(e)}
 
 
 if __name__ == "__main__":
@@ -262,6 +296,7 @@ if __name__ == "__main__":
     print("  Dashboard: http://localhost:8765/")
     print("  Health:    GET  /health")
     print("  Debug:     GET  /debug")
+    print("  Search:    GET  /search-test?last=Williams&first=Mitch")
     print("  HYROX:     POST /hyrox/lookup")
     print("  Press Ctrl+C to stop")
     print("=" * 55)
