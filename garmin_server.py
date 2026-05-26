@@ -7,6 +7,7 @@ Start:  python garmin_server.py
          (or double-click start_garmin_server.bat on Windows)
 """
 
+import asyncio
 import json
 import os
 import traceback
@@ -19,7 +20,7 @@ from pydantic import BaseModel
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-app = FastAPI(title="HYROX Coaching Proxy", version="3.0.2")
+app = FastAPI(title="HYROX Coaching Proxy", version="3.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -171,6 +172,10 @@ def build_result(athlete_row, df, cols, season, location):
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Request models
+# ─────────────────────────────────────────────────────────────────────────────
+
 class HyroxRequest(BaseModel):
     last_name:  str
     first_name: Optional[str] = None
@@ -179,6 +184,50 @@ class HyroxRequest(BaseModel):
     gender:     Optional[str] = None
     division:   Optional[str] = None
 
+
+class HyroxSearchAllRequest(BaseModel):
+    last_name:  str
+    first_name: Optional[str] = None
+    season:     int
+    locations:  list
+    gender:     Optional[str] = None
+    division:   Optional[str] = None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper for parallel search
+# ─────────────────────────────────────────────────────────────────────────────
+
+def lookup_one_sync(loc: str, last_name: str, first_name, season: int, gender, division):
+    """Synchronous single-location lookup — safe to run via asyncio.to_thread."""
+    try:
+        df   = get_race_df(season, loc, gender, division)
+        cols = detect_columns(df)
+        name_col = cols.get("athlete_name")
+        if not name_col:
+            return []
+        col  = df[name_col].str.lower()
+        mask = col.str.contains(last_name.lower(), na=False)
+        if first_name:
+            mask = mask & col.str.contains(first_name.lower(), na=False)
+        athlete_rows = df[mask]
+        if athlete_rows.empty:
+            return []
+        results = []
+        for i in range(len(athlete_rows)):
+            row = athlete_rows.iloc[[i]]
+            r   = build_result(row, df, cols, season, loc)
+            r["location"] = loc   # slug form, used by JS fmtLoc()
+            results.append(r)
+        return results
+    except Exception as e:
+        print(f"[search-all] {loc} S{season}: {e}")
+        return []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Routes
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
 def serve_dashboard():
@@ -189,7 +238,7 @@ def serve_dashboard():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "hyrox-coaching-proxy", "version": "3.0.2"}
+    return {"status": "ok", "service": "hyrox-coaching-proxy", "version": "3.1.0"}
 
 
 @app.get("/debug")
@@ -220,20 +269,17 @@ def search_test(last: str = "Williams", first: str = "Mitch", season: int = 8, l
         if not name_col:
             return {"error": "no name column detected", "all_columns": list(df.columns)}
 
-        # Show what names exist that contain the search term
         col_series = df[name_col].str.lower()
         last_matches  = df[col_series.str.contains(last.lower(), na=False)]
         first_matches = last_matches[last_matches[name_col].str.lower().str.contains(first.lower(), na=False)] if first else last_matches
 
         if first_matches.empty:
-            # show a sample of names so we can see the format
-            sample_names = df[name_col].head(20).tolist()
             return {
                 "found": False,
                 "searched_last": last,
                 "searched_first": first,
                 "name_column": name_col,
-                "sample_names_in_db": sample_names,
+                "sample_names_in_db": df[name_col].head(20).tolist(),
                 "last_name_matches": last_matches[name_col].tolist()[:20],
             }
 
@@ -246,17 +292,32 @@ def search_test(last: str = "Williams", first: str = "Mitch", season: int = 8, l
             "found": True,
             "count": len(results),
             "results": results,
-            "js_would_see": {
-                "success": True,
-                "results": results,
-            }
         }
     except Exception as e:
         return {"error": str(e), "traceback": traceback.format_exc()}
 
 
+@app.post("/hyrox/search-all")
+async def hyrox_search_all(req: HyroxSearchAllRequest):
+    """
+    Search multiple race locations in parallel (one request, server does the fan-out).
+    This replaces the old pattern of 85 parallel client-side requests.
+    """
+    tasks = [
+        asyncio.to_thread(
+            lookup_one_sync,
+            loc, req.last_name, req.first_name, req.season, req.gender, req.division
+        )
+        for loc in req.locations
+    ]
+    all_lists = await asyncio.gather(*tasks)
+    results = [r for loc_results in all_lists for r in loc_results]
+    return {"success": True, "results": results, "count": len(results)}
+
+
 @app.post("/hyrox/lookup")
 async def hyrox_lookup(req: HyroxRequest):
+    """Single-location lookup (kept for backward compat / manual testing)."""
     try:
         df   = get_race_df(req.season, req.location, req.gender, req.division)
         cols = detect_columns(df)
@@ -292,12 +353,12 @@ async def hyrox_lookup(req: HyroxRequest):
 if __name__ == "__main__":
     import uvicorn
     print("=" * 55)
-    print("  HYROX Coaching Dashboard — Local Proxy Server v3")
+    print("  HYROX Coaching Dashboard — Local Proxy Server v3.1")
     print("  Dashboard: http://localhost:8765/")
     print("  Health:    GET  /health")
     print("  Debug:     GET  /debug")
     print("  Search:    GET  /search-test?last=Williams&first=Mitch")
-    print("  HYROX:     POST /hyrox/lookup")
+    print("  HYROX:     POST /hyrox/search-all  (multi-location)")
     print("  Press Ctrl+C to stop")
     print("=" * 55)
     uvicorn.run(app, host="127.0.0.1", port=8765, log_level="warning")
