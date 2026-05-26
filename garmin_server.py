@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-app = FastAPI(title="HYROX Coaching Proxy", version="3.2.0")
+app = FastAPI(title="HYROX Coaching Proxy", version="3.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -231,7 +231,7 @@ def lookup_one_sync(loc: str, last_name: str, first_name, season: int, gender, d
         for i in range(len(athlete_rows)):
             row = athlete_rows.iloc[[i]]
             r   = build_result(row, df, cols, season, loc)
-            r["location"] = loc
+            r["location"] = loc   # slug form, used by JS fmtLoc()
             results.append(r)
         return results
     except Exception as e:
@@ -252,7 +252,52 @@ def serve_dashboard():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "hyrox-coaching-proxy", "version": "3.2.0"}
+    return {"status": "ok", "service": "hyrox-coaching-proxy", "version": "3.3.0"}
+
+
+@app.get("/locations")
+def list_locations(season: Optional[int] = None):
+    """
+    List all races available in the pyrox manifest.
+    Use ?season=8 to filter to a specific season.
+    Useful for checking whether a recent event (e.g. Shanghai S8) has been indexed.
+    """
+    try:
+        client = get_pyrox()
+        df = client.list_races(season=season)
+        races = df.to_dict(orient="records")
+        return {
+            "status": "ok",
+            "count": len(races),
+            "filter_season": season,
+            "races": races,
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.get("/race-check")
+def race_check(season: int = 8, location: str = "shanghai"):
+    """
+    Fetch a specific race and return row count + sample names.
+    Useful for verifying data recency — e.g. /race-check?season=8&location=shanghai
+    Returns an error if the location isn't in the manifest yet.
+    """
+    try:
+        df = get_race_df(season, location)
+        cols = detect_columns(df)
+        name_col = cols.get("athlete_name")
+        sample_names = df[name_col].head(10).tolist() if name_col else []
+        return {
+            "status": "ok",
+            "season": season,
+            "location": location,
+            "rows": len(df),
+            "columns": list(df.columns),
+            "sample_names": sample_names,
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e), "note": "Location may not be in manifest yet."}
 
 
 @app.get("/debug")
@@ -367,13 +412,15 @@ async def hyrox_lookup(req: HyroxRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    print("=" * 55)
-    print("  HYROX Coaching Dashboard — Local Proxy Server v3.2")
-    print("  Dashboard: http://localhost:8765/")
-    print("  Health:    GET  /health")
-    print("  Debug:     GET  /debug")
-    print("  Search:    GET  /search-test?last=Williams&first=Mitch")
-    print("  HYROX:     POST /hyrox/search-all  (multi-location + partner)")
+    print("=" * 60)
+    print("  HYROX Coaching Dashboard — Local Proxy Server v3.3")
+    print("  Dashboard:  http://localhost:8765/")
+    print("  Health:     GET  /health")
+    print("  Locations:  GET  /locations?season=8")
+    print("  Race check: GET  /race-check?season=8&location=shanghai")
+    print("  Debug:      GET  /debug")
+    print("  Search:     GET  /search-test?last=Williams&first=Mitch")
+    print("  HYROX:      POST /hyrox/search-all  (multi-location + partner)")
     print("  Press Ctrl+C to stop")
-    print("=" * 55)
+    print("=" * 60)
     uvicorn.run(app, host="127.0.0.1", port=8765, log_level="warning")
