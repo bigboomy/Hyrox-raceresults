@@ -149,7 +149,7 @@ code { background:#f4f4f4; padding:1px 5px; border-radius:4px; font-size:0.82rem
       <option value="open">Open</option>
       <option value="pro">Pro</option>
       <option value="doubles">Doubles</option>
-      <option value="relay">Relay</option>
+      <option value="pro_doubles">Pro Doubles</option>
     </select>
     <span id="locSource" style="font-size:0.76rem;color:#aaa;align-self:center">Race list: built-in</span>
   </div>
@@ -366,9 +366,11 @@ function athleteName(r) {
   return r.athlete || r.athlete_name || r.name || "Athlete";
 }
 
-/* ── Single-request search: one POST to /hyrox/search-all ─────────────────
-   The server loads races on a small worker pool and returns combined results.
-   Benchmarks (median, top 10%, rank) are scoped to the athlete's division.  */
+/* ── Batched search: POST /hyrox/search-all in chunks of SEARCH_BATCH races ──
+   A cold "select all" season takes several minutes on Render's free tier, so
+   batches keep each request short, show progress, and render results as they
+   arrive. Benchmarks (median, top 10%, rank) are scoped to the athlete's division. */
+var SEARCH_BATCH = 12;
 async function doSearch() {
   var last        = document.getElementById("lastName").value.trim();
   var first       = document.getElementById("firstName").value.trim();
@@ -387,46 +389,47 @@ async function doSearch() {
   btn.disabled = true;
   btn.textContent = "Searching...";
   msg.style.display = "block";
-  msg.textContent = "Searching "+locs.length+" race"+(locs.length>1?"s":"")+" — this may take up to a minute on first run while data loads...";
+  msg.textContent = "Searching "+locs.length+" race"+(locs.length>1?"s":"")+"... first search after the server wakes can take a few minutes while race data loads.";
   document.getElementById("resultsSection").style.display = "none";
 
   searchResults = [];
-  try {
-    var body = {last_name: last, season: parseInt(season), locations: locs};
-    if (first)        body.first_name          = first;
-    if (partnerLast)  body.partner_last_name   = partnerLast;
-    if (partnerFirst) body.partner_first_name  = partnerFirst;
-    if (gender)       body.gender              = gender;
-    if (div)          body.division            = div;
+  var base = {last_name: last, season: parseInt(season)};
+  if (first)        base.first_name          = first;
+  if (partnerLast)  base.partner_last_name   = partnerLast;
+  if (partnerFirst) base.partner_first_name  = partnerFirst;
+  if (gender)       base.gender              = gender;
+  if (div)          base.division            = div;
 
-    var res  = await fetch("/hyrox/search-all", {
-      method:  "POST",
-      headers: {"Content-Type": "application/json"},
-      body:    JSON.stringify(body),
-      signal:  AbortSignal.timeout(120000),   // 2-minute timeout
-    });
-    var data = await res.json();
-
-    if (data.success && data.results) {
-      data.results.forEach(function(a) {
-        searchResults.push({
-          loc:    a.location || "",
-          season: parseInt(season),
-          data:   a,
-        });
+  var done = 0, failed = 0;
+  for (var i = 0; i < locs.length; i += SEARCH_BATCH) {
+    var batch = locs.slice(i, i + SEARCH_BATCH);
+    var body  = Object.assign({}, base, {locations: batch});
+    try {
+      var res  = await fetch("/hyrox/search-all", {
+        method:  "POST",
+        headers: {"Content-Type": "application/json"},
+        body:    JSON.stringify(body),
+        signal:  AbortSignal.timeout(180000),   // per batch
       });
+      var data = await res.json();
+      if (data.success && data.results) {
+        data.results.forEach(function(a) {
+          searchResults.push({loc: a.location || "", season: parseInt(season), data: a});
+        });
+      }
+    } catch(e) {
+      console.error("Search batch error:", e);
+      failed += batch.length;
     }
-  } catch(e) {
-    console.error("Search error:", e);
-    msg.textContent = "Search failed: " + e.message;
-    btn.disabled = false;
-    btn.textContent = "Search →";
-    return;
+    done += batch.length;
+    msg.textContent = "Searched "+done+" of "+locs.length+" races — "+searchResults.length+" result"+(searchResults.length!==1?"s":"")+" so far...";
+    if (searchResults.length) renderResults();
   }
 
   btn.disabled = false;
   btn.textContent = "Search →";
-  msg.textContent = "Found "+searchResults.length+" result"+(searchResults.length!==1?"s":"")+" across "+locs.length+" race"+(locs.length!==1?"s":"")+" searched.";
+  msg.textContent = "Found "+searchResults.length+" result"+(searchResults.length!==1?"s":"")+" across "+locs.length+" race"+(locs.length!==1?"s":"")+" searched."
+    + (failed ? " ("+failed+" races timed out — search again, they'll be faster now.)" : "");
   renderResults();
 }
 
@@ -444,7 +447,7 @@ function renderResults() {
     var id   = item.loc+"_"+item.season+"_"+name.replace(/\s/g,"_");
     var alreadyPinned = pinned.some(function(p){ return p.id===id; });
 
-    var miniHeat = (r.splits||[]).slice(0,16).map(function(sp){
+    var miniHeat = (r.splits||[]).filter(function(sp){ return sp.station!=="Run"; }).slice(0,16).map(function(sp){
       return '<div class="mh '+heatCls(deltaSec(sp.vs_median))+'" title="'+sp.station+': '+sp.time+'"></div>';
     }).join("");
 

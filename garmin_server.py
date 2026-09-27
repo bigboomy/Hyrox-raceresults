@@ -7,11 +7,12 @@ Render:  uvicorn garmin_server:app --host 0.0.0.0 --port $PORT
 
 Memory controls (optional env vars):
   MAX_CACHED_RACES   races kept in memory, least-recently-used evicted first (default 100)
-  SEARCH_WORKERS     races loaded at the same time during a search (default 4)
-  MALLOC_ARENA_MAX=2 recommended on Render — stops glibc holding freed memory per thread
+  SEARCH_WORKERS     races loaded at the same time during a search (default 3)
+(glibc arena cap + malloc_trim are applied in code, so no MALLOC_ARENA_MAX env var is needed)
 """
 
 import asyncio
+import gc
 import json
 import math
 import os
@@ -28,11 +29,43 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-VERSION = "3.4.1"
+VERSION = "3.5.0"
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 MAX_CACHED_RACES = int(os.environ.get("MAX_CACHED_RACES", "100"))
-SEARCH_WORKERS   = int(os.environ.get("SEARCH_WORKERS", "4"))
+SEARCH_WORKERS   = int(os.environ.get("SEARCH_WORKERS", "3"))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Memory hygiene. Measured on Render: a cold 106-race search peaked at 535 MB
+# while the race cache itself was only 78 MB — the rest was freed parser memory
+# that Arrow's allocator and glibc's per-thread arenas never handed back.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_libc = None
+try:
+    import ctypes
+    _libc = ctypes.CDLL("libc.so.6")
+    _libc.mallopt(-8, 2)          # M_ARENA_MAX = 2 (same effect as MALLOC_ARENA_MAX=2)
+except Exception:
+    _libc = None                  # not glibc (e.g. local Windows run)
+
+try:
+    import pyarrow as _pa
+    _pa.set_memory_pool(_pa.system_memory_pool())   # use malloc so trimming works
+except Exception:
+    _pa = None
+
+
+def _release_memory():
+    gc.collect()
+    if _libc is not None:
+        try:
+            _libc.malloc_trim(0)
+        except Exception:
+            pass
+
+
 MAX_LOCATIONS_PER_SEARCH = 150
 
 app = FastAPI(title="HYROX Coaching Proxy", version=VERSION)
@@ -125,6 +158,7 @@ def get_race_df(season: int, location: str) -> pd.DataFrame:
         raw  = get_pyrox().get_race(season=int(season), location=location)
         slim = slim_df(raw)
         del raw
+        _release_memory()
         with _cache_lock:
             _race_cache[key] = slim
             while len(_race_cache) > MAX_CACHED_RACES:
@@ -251,19 +285,39 @@ def build_result(row, df, cols, season, location):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def apply_filters(df, cols, gender, division):
+    # Exact match on normalised values: data uses open / pro / doubles / pro_doubles,
+    # so "pro" must not also pick up "pro_doubles".
     if gender and cols.get("gender"):
         df = df[df[cols["gender"]].astype(str).map(_norm) == _norm(gender)]
     if division and cols.get("division"):
-        df = df[df[cols["division"]].astype(str).map(_norm).str.contains(_norm(division), regex=False)]
+        df = df[df[cols["division"]].astype(str).map(_norm) == _norm(division)]
     return df
 
 
 def name_mask(names_lower: pd.Series, last: str, first: Optional[str]):
-    # Whole-word last name ("williams" won't match "williamson"); first name matches word start.
+    """Coarse filter: whole-word last name, first name at a word start, anywhere in the string."""
     mask = names_lower.str.contains(rf"\b{re.escape(last.lower().strip())}\b", regex=True, na=False)
     if first:
         mask &= names_lower.str.contains(rf"\b{re.escape(first.lower().strip())}", regex=True, na=False)
     return mask
+
+
+def person_match(name: str, division: str, last: str, first: Optional[str]) -> bool:
+    """Precise check on a coarse match.
+    Team rows hold both athletes ("Mitch Williams, Darko Radakovic"), so first and last
+    must sit in the same comma-separated person — otherwise "Gabi Mitchem, Lewis Williams"
+    would match Mitch Williams. Individual rows are "Last, First" and match as a whole."""
+    if not first:
+        return True
+    is_team = any(k in str(division).lower() for k in ("doubles", "relay"))
+    if not is_team:
+        return True
+    parts = [p.strip() for p in str(name).lower().split(",")]
+    if all(" " not in p for p in parts):
+        return True   # single-person "Last, First" form (some doubles rows list one athlete)
+    last_re  = re.compile(rf"\b{re.escape(last.lower().strip())}\b")
+    first_re = re.compile(rf"\b{re.escape(first.lower().strip())}")
+    return any(last_re.search(p) and first_re.search(p) for p in parts)
 
 
 def lookup_one_sync(loc, season, last, first=None, gender=None, division=None,
@@ -286,12 +340,23 @@ def lookup_one_sync(loc, season, last, first=None, gender=None, division=None,
     if partner_last:
         mask |= name_mask(names, partner_last, partner_first)
 
-    results = []
+    div_col = cols.get("division")
+    results, seen = [], set()
     for _, row in candidates[mask].iterrows():
+        name = str(row[name_col])
+        div  = str(row[div_col]) if div_col else ""
+        if not (person_match(name, div, last, first)
+                or (partner_last and person_match(name, div, partner_last, partner_first))):
+            continue
         try:
-            results.append(build_result(row, df, cols, season, loc))
+            r = build_result(row, df, cols, season, loc)
         except Exception as e:
             print(f"[search] S{season} {loc}: skipped row — {e}")
+            continue
+        key = (r["athlete"], r["division"], r["total_time"])   # source data has some duplicate rows
+        if key not in seen:
+            seen.add(key)
+            results.append(r)
     return results
 
 
