@@ -12,6 +12,7 @@ Memory controls (optional env vars):
 """
 
 import asyncio
+import json
 import math
 import os
 import re
@@ -27,7 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-VERSION = "3.4.0"
+VERSION = "3.4.1"
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 MAX_CACHED_RACES = int(os.environ.get("MAX_CACHED_RACES", "100"))
@@ -406,7 +407,8 @@ def debug_lookup(season: int = 8, location: str = "sydney"):
             "values": values,
             "raw_mb":  round(int(raw.memory_usage(deep=True).sum()) / 1e6, 2),
             "slim_mb": round(int(slim.memory_usage(deep=True).sum()) / 1e6, 2),
-            "sample": raw.head(2).astype(str).to_dict(orient="records"),
+            # to_json turns NaN into null (pandas 3 keeps NaN even after astype(str))
+            "sample": json.loads(raw.head(2).to_json(orient="records", date_format="iso")),
         }
     except Exception as e:
         return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
