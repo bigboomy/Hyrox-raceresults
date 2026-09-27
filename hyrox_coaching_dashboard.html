@@ -142,15 +142,16 @@ code { background:#f4f4f4; padding:1px 5px; border-radius:4px; font-size:0.82rem
       <option value="">Any gender</option>
       <option value="male">Male</option>
       <option value="female">Female</option>
+      <option value="mixed">Mixed</option>
     </select>
     <select id="divisionSel" class="input" style="max-width:165px">
       <option value="">Any division</option>
       <option value="open">Open</option>
       <option value="pro">Pro</option>
-      <option value="doubles_men">Doubles Men</option>
-      <option value="doubles_women">Doubles Women</option>
-      <option value="doubles_mixed">Doubles Mixed</option>
+      <option value="doubles">Doubles</option>
+      <option value="relay">Relay</option>
     </select>
+    <span id="locSource" style="font-size:0.76rem;color:#aaa;align-self:center">Race list: built-in</span>
   </div>
 
   <div id="locPicker" class="loc-picker" style="display:none">
@@ -245,7 +246,56 @@ async function checkServer() {
   var b = document.getElementById("srvBadge");
   b.textContent = serverUp ? "⚡ HYROX server online" : "HYROX server offline";
   b.className = "srv-badge " + (serverUp ? "srv-ok" : "srv-off");
+  if (serverUp && !liveLocsLoaded && !liveLocsLoading) loadLiveLocations();
 }
+
+/* ── Live race list from /locations (falls back to built-in SEASON_LOCS) ── */
+var liveLocsLoaded = false, liveLocsLoading = false;
+
+function seasonLabel(n) {
+  var y = 2017 + n;   // Season 8 = 2025-26
+  return "Season " + n + " (" + y + "-" + String(y + 1).slice(2) + ")";
+}
+
+function buildSeasonSelect() {
+  var sel = document.getElementById("seasonSel");
+  var seasons = Object.keys(SEASON_LOCS).map(Number)
+    .filter(function(s){ return SEASON_LOCS[s] && SEASON_LOCS[s].length; })
+    .sort(function(a,b){ return b-a; });
+  if (!seasons.length) return;
+  sel.innerHTML = seasons.map(function(s){
+    return '<option value="'+s+'">'+seasonLabel(s)+'</option>';
+  }).join("");
+  sel.value = String(seasons[0]);   // newest season by default
+}
+
+async function loadLiveLocations() {
+  liveLocsLoading = true;
+  try {
+    var r = await fetch("/locations", {signal: AbortSignal.timeout(30000)});
+    var d = await r.json();
+    if (d.status === "ok" && d.races && d.races.length) {
+      var map = {};
+      d.races.forEach(function(x){
+        (map[x.season] = map[x.season] || []).push(String(x.location));
+      });
+      Object.keys(map).forEach(function(k){ map[k].sort(); });
+      SEASON_LOCS = map;
+      liveLocsLoaded = true;
+      var prev = document.getElementById("seasonSel").value;
+      buildSeasonSelect();
+      if (document.getElementById("seasonSel").value !== prev) selLocs.clear();
+      var valid = getLocs();
+      selLocs.forEach(function(l){ if (valid.indexOf(l) < 0) selLocs.delete(l); });
+      renderChips(); updBtn();
+      document.getElementById("locSource").textContent = "Race list: live (" + d.count + " races)";
+    }
+  } catch(e) {
+    console.warn("Live race list unavailable, using built-in list:", e);
+  }
+  liveLocsLoading = false;
+}
+
 checkServer();
 setInterval(checkServer, 15000);
 
@@ -316,6 +366,9 @@ function athleteName(r) {
   return r.athlete || r.athlete_name || r.name || "Athlete";
 }
 
+/* ── Single-request search: one POST to /hyrox/search-all ─────────────────
+   The server loads races on a small worker pool and returns combined results.
+   Benchmarks (median, top 10%, rank) are scoped to the athlete's division.  */
 async function doSearch() {
   var last        = document.getElementById("lastName").value.trim();
   var first       = document.getElementById("firstName").value.trim();
@@ -334,23 +387,23 @@ async function doSearch() {
   btn.disabled = true;
   btn.textContent = "Searching...";
   msg.style.display = "block";
-  msg.textContent = "Searching "+locs.length+" race"+(locs.length>1?"s":"")+" — may take up to a minute on first run while data loads...";
+  msg.textContent = "Searching "+locs.length+" race"+(locs.length>1?"s":"")+" — this may take up to a minute on first run while data loads...";
   document.getElementById("resultsSection").style.display = "none";
 
   searchResults = [];
   try {
     var body = {last_name: last, season: parseInt(season), locations: locs};
-    if (first)        body.first_name         = first;
-    if (partnerLast)  body.partner_last_name  = partnerLast;
-    if (partnerFirst) body.partner_first_name = partnerFirst;
-    if (gender)       body.gender             = gender;
-    if (div)          body.division           = div;
+    if (first)        body.first_name          = first;
+    if (partnerLast)  body.partner_last_name   = partnerLast;
+    if (partnerFirst) body.partner_first_name  = partnerFirst;
+    if (gender)       body.gender              = gender;
+    if (div)          body.division            = div;
 
     var res  = await fetch("/hyrox/search-all", {
       method:  "POST",
       headers: {"Content-Type": "application/json"},
       body:    JSON.stringify(body),
-      signal:  AbortSignal.timeout(120000),
+      signal:  AbortSignal.timeout(120000),   // 2-minute timeout
     });
     var data = await res.json();
 
@@ -400,16 +453,17 @@ function renderResults() {
       +'<div class="rcard-name">'+name+'</div>'
       +'<div class="rcard-loc">'+fmtLoc(item.loc)+' &middot; Season '+item.season+'</div>'
       +'<div class="rcard-time" style="color:'+col+'">'+r.total_time+'</div>'
-      +'<div class="rcard-div">'+(r.division||'')+"</div>"
+      +'<div class="rcard-div">'+[r.division, r.gender].filter(Boolean).join(' &middot; ')
+      +(r.rank && r.field_size ? ' &middot; #'+r.rank+' of '+r.field_size.toLocaleString() : '')+"</div>"
       +'<div class="rcard-metrics">'
       +'<div class="rm"><div class="v blue">'+(b.top_percent||'&mdash;')+'<small>th</small></div><div class="l">Percentile</div></div>'
       +'<div class="rm"><div class="v '+gCls+'">'+(b.gap_to_top_10||'&mdash;')+'</div><div class="l">vs Top 10%</div></div>'
-      +'<div class="rm"><div class="v">'+(r.field_size?r.field_size.toLocaleString():'&mdash;')+'</div><div class="l">Finishers</div></div>'
+      +'<div class="rm"><div class="v">'+(r.field_size?r.field_size.toLocaleString():'&mdash;')+'</div><div class="l">In division</div></div>'
       +'</div>'
       +'<div class="mini-heat">'+miniHeat+'</div>'
       +(alreadyPinned
         ? '<button class="btn-sm" disabled>✓ Pinned</button>'
-        : '<button class="btn-pin" onclick="pinRace('+idx+')">&#128204; Pin</button>')
+        : '<button class="btn-pin" onclick="pinRace('+idx+')">📌 Pin</button>')
       +'</div>';
   }).join("");
 
@@ -434,6 +488,7 @@ function pinRace(idx) {
     division:    r.division || "",
     total_time:  r.total_time,
     field_size:  r.field_size,
+    rank:        r.rank || null,
     benchmarks:  r.benchmarks || {},
     splits:      r.splits || [],
     raceDate:    r.date || r.race_date || null,
@@ -460,7 +515,7 @@ function renderComparison() {
   document.getElementById("pinTray").innerHTML = pinned.map(function(p){
     return '<div class="pin-chip" style="border-color:'+p.color+';color:'+p.color+'">'
       +'<span>'+p.athleteName+' &middot; '+p.locLabel+' S'+p.season+'</span>'
-      +'<button class="pin-chip-x" onclick="unpin(\''+ p.id +'\')" title="Unpin">&times;</button>'
+      +'<button class="pin-chip-x" onclick="unpin(\''+p.id+'\')" title="Unpin">&times;</button>'
       +'</div>';
   }).join("");
 
@@ -472,11 +527,11 @@ function renderComparison() {
       +'<div class="pcard-hdr">'
       +'<div><div class="pcard-name" style="color:'+p.color+'">'+p.athleteName+'</div>'
       +'<div class="pcard-loc">'+p.locLabel+' &middot; S'+p.season+' &middot; '+p.division+'</div></div>'
-      +'<button class="btn-sm" onclick="unpin(\''+ p.id +'\')">&times;</button>'
+      +'<button class="btn-sm" onclick="unpin(\''+p.id+'\')">&times;</button>'
       +'</div>'
       +'<div class="pcard-time" style="color:'+p.color+'">'+p.total_time+'</div>'
       +'<div class="pcard-rank">'+(b.top_percent?b.top_percent+'th percentile &middot; ':'')
-      +(p.field_size?p.field_size.toLocaleString()+' finishers':'')+'</div>'
+      +(p.rank?'#'+p.rank+' of ':'')+(p.field_size?p.field_size.toLocaleString()+' in division':'')+'</div>'
       +'<div class="pcard-benchmarks">'
       +'<div class="pb-m"><div class="v '+gCls+'">'+(b.gap_to_top_10||'&mdash;')+'</div><div class="l">vs Top 10%</div></div>'
       +'<div class="pb-m"><div class="v">'+(b.top_10_pct||'&mdash;')+'</div><div class="l">Top 10% time</div></div>'
