@@ -29,7 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-VERSION = "3.5.0"
+VERSION = "3.5.1"
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 MAX_CACHED_RACES = int(os.environ.get("MAX_CACHED_RACES", "100"))
@@ -431,7 +431,12 @@ def list_locations(season: Optional[int] = None):
     """Every race in the pyrox index (?season=9 to filter). The dashboard builds its race list from this."""
     try:
         df = get_pyrox().list_races(season=season)
-        races = [{"season": int(r["season"]), "location": str(r["location"])} for _, r in df.iterrows()]
+        races, seen = [], set()
+        for _, r in df.iterrows():   # index lists some races twice (e.g. once per year)
+            key = (int(r["season"]), str(r["location"]).lower())
+            if key not in seen:
+                seen.add(key)
+                races.append({"season": key[0], "location": str(r["location"])})
         return {"status": "ok", "count": len(races), "filter_season": season, "races": races}
     except Exception as e:
         return {"status": "error", "error": str(e)}
@@ -492,7 +497,7 @@ def search_test(last: str = "Williams", first: str = "Mitch", season: int = 8, l
 @app.post("/hyrox/search-all")
 async def hyrox_search_all(req: HyroxSearchAllRequest):
     """Search many locations in one request. Work runs on a bounded thread pool."""
-    locs = [str(l) for l in req.locations][:MAX_LOCATIONS_PER_SEARCH]
+    locs = list(dict.fromkeys(str(l).lower() for l in req.locations))[:MAX_LOCATIONS_PER_SEARCH]
     loop = asyncio.get_running_loop()
     tasks = [
         loop.run_in_executor(
